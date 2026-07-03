@@ -29,15 +29,17 @@
         <div class="md:w-3/5 p-8 flex flex-col justify-center">
           <div class="max-w-md w-full mx-auto">
             <h2 class="text-2xl font-bold text-gray-800 mb-2 transition-all duration-300 hover:text-red-700">Lupa Password</h2>
-            <p class="text-gray-600 mb-6 transition-all duration-300 hover:text-gray-800">Masukkan email Anda untuk mereset password</p>
+            <p class="text-gray-600 mb-6 transition-all duration-300 hover:text-gray-800">Masukkan email atau nomor WhatsApp untuk mereset password</p>
 
             <!-- Forgot Password Form -->
-            <form @submit.prevent="submitEmail" class="space-y-5">
+            <form @submit.prevent="submitRequest" class="space-y-5">
               <!-- Email Input (default) -->
               <div v-if="!showPhoneInput" class="group">
-                <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">Email</label>
+                <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">
+                  Email <span class="text-red-500">*</span>
+                </label>
                 <input
-                  v-model="email"
+                  v-model="formData.email"
                   type="email"
                   placeholder="Masukkan email Anda"
                   class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all duration-300 hover:border-red-400 hover:shadow-md"
@@ -47,14 +49,18 @@
 
               <!-- Phone Input (sembunyi, muncul saat diklik link) -->
               <div v-if="showPhoneInput" class="group">
-                <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">Nomor WhatsApp</label>
+                <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">
+                  Nomor WhatsApp <span class="text-red-500">*</span>
+                </label>
                 <input
-                  v-model="phone"
-                  type="text"
-                  placeholder="Contoh: +6281234567890"
+                  v-model="formData.no_telp"
+                  type="tel"
+                  placeholder="Contoh: 081234567890"
+                  maxlength="15"
                   class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all duration-300 hover:border-red-400 hover:shadow-md"
                   required
                 />
+                <p class="text-xs text-gray-500 mt-1">Gunakan format: 0812xxxx atau 62812xxxx</p>
               </div>
 
               <button
@@ -62,7 +68,7 @@
                 :disabled="loading"
                 class="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transform disabled:opacity-70"
               >
-                Kirim Kode OTP
+                {{ loading ? 'Mengirim...' : 'Kirim Kode OTP' }}
               </button>
 
               <!-- Link "Lupa email? Gunakan nomor WhatsApp" -->
@@ -72,7 +78,7 @@
                   @click="togglePhoneInput"
                   class="text-red-600 hover:text-red-800 font-medium text-sm underline"
                 >
-                  Lupa email? Gunakan nomor WhatsApp.
+                  {{ showPhoneInput ? 'Gunakan email saja' : 'Lupa email? Gunakan nomor WhatsApp.' }}
                 </button>
               </div>
             </form>
@@ -107,52 +113,89 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
+import { useRouter } from 'vue-router'
+
 const router = useRouter()
 
-const email = ref('')
-const phone = ref('')
 const showPhoneInput = ref(false)
 const loading = ref(false)
 
+// ✅ Reactive form data sesuai database admin
+const formData = reactive({
+  email: '',
+  no_telp: ''  // ✅ Sesuai field di database: no_telp (bukan phone)
+})
+
+// ✅ Toggle antara email dan no_telp
 const togglePhoneInput = () => {
   showPhoneInput.value = !showPhoneInput.value
   // Reset input saat beralih
   if (showPhoneInput.value) {
-    email.value = ''
+    formData.email = ''
   } else {
-    phone.value = ''
+    formData.no_telp = ''
   }
 }
 
-const submitEmail = async () => {
+// ✅ Submit request forgot password
+const submitRequest = async () => {
+  // Validasi sederhana
+  if (!showPhoneInput.value && !formData.email) {
+    alert('⚠️ Mohon masukkan email Anda')
+    return
+  }
+  if (showPhoneInput.value && !formData.no_telp) {
+    alert('⚠️ Mohon masukkan nomor WhatsApp Anda')
+    return
+  }
+
   try {
     loading.value = true
 
-    const payload = {}
-    if (showPhoneInput.value) {
-      payload.phone = phone.value
+    // ✅ TENTUKAN METODE berdasarkan input yang diisi
+    const metode = showPhoneInput.value ? 'whatsapp' : 'email'
+    
+    // ✅ Payload WAJIB kirim field 'metode' + email/no_telp
+    const payload = {
+      metode: metode  // ✅ INI PENTING! Backend validasi ini
+    }
+    
+    if (metode === 'whatsapp') {
+      // Format nomor: hapus karakter non-digit, pastikan mulai dengan 62 atau 0
+      let phone = formData.no_telp.replace(/\D/g, '')
+      if (phone.startsWith('0')) {
+        phone = '62' + phone.slice(1)
+      }
+      payload.no_telp = phone
     } else {
-      payload.email = email.value
+      payload.email = formData.email
     }
 
-    await $fetch("http://localhost:8000/api/forgot-password", {
+    console.log('Sending payload:', payload) // Debug log
+
+    const response = await $fetch("http://localhost:8000/api/forgot-password", {
       method: "POST",
       body: payload
     })
 
-    // Redirect ke verify-otp dengan parameter
-    let query = {}
-    if (showPhoneInput.value && phone.value) {
-      query.phone = phone.value
-    } else if (email.value) {
-      query.email = email.value
+    if (response.success) {
+      // ✅ Redirect ke verify-otp dengan parameter yang sesuai
+      const query = {
+        ...(payload.email && { email: payload.email }),
+        ...(payload.no_telp && { no_telp: payload.no_telp }),
+        metode: payload.metode
+      }
+      
+      router.push({
+        path: '/verify-otp',
+        query: query
+      })
     }
 
-    router.push(`/verify-otp?${new URLSearchParams(query).toString()}`)
-
   } catch (err) {
-    alert(err?.data?.message || "Data tidak ditemukan!")
+    console.error('Forgot password error:', err)
+    alert('❌ ' + (err?.data?.message || 'Gagal mengirim kode OTP. Periksa koneksi atau coba lagi.'))
   } finally {
     loading.value = false
   }

@@ -33,28 +33,31 @@
 
             <!-- Verify OTP Form -->
             <form @submit.prevent="verifyOtp" class="space-y-5">
-              <!-- Email or Phone Display -->
+              <!-- Email or No Telp Display -->
               <div class="group">
                 <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">
-                  {{ email ? 'Email' : 'Nomor WhatsApp' }}
+                  {{ identifierType === 'email' ? 'Email' : 'Nomor WhatsApp' }}
                 </label>
                 <div class="w-full px-4 py-3 border border-gray-300 rounded-lg bg-gray-50 transition-all duration-300">
-                  <p class="text-gray-700"><b>{{ email || phone }}</b></p>
+                  <p class="text-gray-700 font-medium">{{ identifier }}</p>
                 </div>
               </div>
 
               <!-- OTP Input -->
               <div class="group">
-                <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">Kode OTP</label>
+                <label class="block text-sm font-medium text-gray-700 mb-2 transition-all duration-300 group-hover:text-red-700">
+                  Kode OTP <span class="text-red-500">*</span>
+                </label>
                 <input
                   v-model="otp"
                   type="text"
                   inputmode="numeric"
                   maxlength="6"
-                  placeholder="Masukkan kode OTP dari email/WhatsApp"
-                  class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all duration-300 hover:border-red-400 hover:shadow-md"
+                  placeholder="Masukkan 6 digit kode OTP"
+                  class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all duration-300 hover:border-red-400 hover:shadow-md text-center text-lg tracking-widest font-mono"
                   required
                 />
+                <p class="text-xs text-gray-500 mt-1">Cek email atau WhatsApp Anda</p>
               </div>
 
               <button
@@ -62,7 +65,7 @@
                 :disabled="loading"
                 class="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-3 px-4 rounded-lg transition-all duration-300 shadow-sm hover:shadow-lg hover:scale-[1.02] active:scale-[0.98] transform disabled:opacity-70"
               >
-                Verifikasi OTP
+                {{ loading ? 'Memverifikasi...' : 'Verifikasi OTP' }}
               </button>
 
               <!-- Resend OTP Button -->
@@ -106,70 +109,123 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 const route = useRoute()
 const router = useRouter()
 
+// ✅ Ambil identifier (email atau no_telp) dari query string
 const email = ref(route.query.email || '')
-const phone = ref(route.query.phone || '')
+const noTelp = ref(route.query.no_telp || '')
+
+// ✅ Computed untuk identifier yang ditampilkan
+const identifier = computed(() => email.value || noTelp.value)
+const identifierType = computed(() => email.value ? 'email' : 'no_telp')
+
 const otp = ref('')
 const loading = ref(false)
 
 // Redirect ke /forgot jika tidak ada data
 onMounted(() => {
-  if (!email.value && !phone.value) {
+  if (!email.value && !noTelp.value) {
     router.push('/forgot')
   }
 })
 
+// ✅ Verify OTP
 const verifyOtp = async () => {
+  // Validasi client-side
+  if (!identifier.value) {
+    alert('⚠️ Data akun tidak ditemukan. Silakan ulangi proses forgot password.')
+    router.push('/forgot')
+    return
+  }
+  
+  if (otp.value.length !== 6) {
+    alert('⚠️ Kode OTP harus 6 digit')
+    return
+  }
+
   try {
     loading.value = true
 
-    await $fetch("http://localhost:8000/api/verify-otp", {
-      method: "POST",
-      body: {
-        email: email.value,
-        phone: phone.value,
-        otp: otp.value
-      }
-    })
-
-    // Redirect ke reset dengan parameter
-    let query = {}
+    // ✅ Payload sesuai backend: email/no_telp + otp
+    const payload = {
+      otp: otp.value
+    }
+    
     if (email.value) {
-      query.email = email.value
-    } else if (phone.value) {
-      query.phone = phone.value
+      payload.email = email.value
+    }
+    if (noTelp.value) {
+      payload.no_telp = noTelp.value
     }
 
-    router.push(`/reset?${new URLSearchParams(query).toString()}`)
+    const response = await $fetch("http://localhost:8000/api/verify-otp", {
+      method: "POST",
+      body: payload
+    })
+
+    if (response.success) {
+      // ✅ Redirect ke reset-password dengan parameter
+      const query = {
+        ...(email.value && { email: email.value }),
+        ...(noTelp.value && { no_telp: noTelp.value })
+      }
+      
+      router.push({
+        path: '/reset',
+        query: query
+      })
+    }
 
   } catch (err) {
-    alert(err?.data?.message || "OTP tidak valid atau sudah kadaluarsa.")
+    console.error('Verify OTP error:', err)
+    
+    // Handle OTP invalid/expired
+    if (err?.data?.message?.includes('OTP')) {
+      alert('❌ ' + err.data.message + '\n\nSilakan minta kode OTP baru.')
+    } else {
+      alert('❌ ' + (err?.data?.message || 'Gagal memverifikasi OTP. Coba lagi.'))
+    }
   } finally {
     loading.value = false
   }
 }
 
+// ✅ Resend OTP
 const resendOtp = async () => {
+  if (!identifier.value) {
+    alert('⚠️ Data akun tidak ditemukan.')
+    return
+  }
+
   try {
     loading.value = true
 
+    // ✅ Payload sama seperti forgot-password
+    const payload = {
+      metode: identifierType.value === 'email' ? 'email' : 'whatsapp'
+    }
+    
+    if (email.value) {
+      payload.email = email.value
+    }
+    if (noTelp.value) {
+      payload.no_telp = noTelp.value
+    }
+
     await $fetch("http://localhost:8000/api/forgot-password", {
       method: "POST",
-      body: {
-        email: email.value,
-        phone: phone.value
-      }
+      body: payload
     })
 
-    alert("OTP berhasil dikirim ulang!")
+    alert("✅ OTP berhasil dikirim ulang! Cek email atau WhatsApp Anda.")
 
   } catch (err) {
-    alert(err?.data?.message || "Gagal mengirim ulang OTP!")
+    console.error('Resend OTP error:', err)
+    alert('❌ ' + (err?.data?.message || 'Gagal mengirim ulang OTP!'))
   } finally {
     loading.value = false
   }
